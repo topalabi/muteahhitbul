@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🗺️ Harita & Parsel Sorgulama</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🗺️ Harita & Parsel Sorgulama</h1>
+            <p>Yer arayın veya haritaya tıklayarak parsel bilgilerini görün</p>
+        </div>
+
+        <!-- Arama Bölümü -->
+        <div class="search-container">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Yer, adres veya landmark arayın..." autocomplete="off">
+                <button id="searchBtn">🔍 Ara</button>
+                <button id="clearBtn" class="clear-btn">🗑️ Temizle</button>
+            </div>
+            <div id="suggestions" class="suggestions"></div>
+            
+            <!-- Koordinat Bilgisi -->
+            <div id="coordinateInfo" class="coordinate-info" style="display: none;">
+                <div class="coord-display">
+                    <span>📍 <strong>Seçilen Koordinat:</strong> <span id="selectedCoords">-</span></span>
+                    <button id="getTkgmBtn" class="tkgm-btn" style="display: none;">🏗️ TKGM Bilgilerini Al</button>
+                    <button id="getHepsiEmlakBtn" class="hepsiemlak-btn" style="display: none;">🏠 Emsal Göster</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Harita Bölümü -->
+        <div class="map-section">
+            <div class="map-container">
+                <div id="map"></div>
+                <div class="map-info">
+                    <p>💡 <strong>İpucu:</strong> Haritaya tıklayarak o noktanın parsel bilgilerini alabilirsiniz</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- TKGM Sonuçları -->
+        <div id="tkgm-results" class="tkgm-results" style="display: none;">
+            <h2>🏗️ Parsel Bilgileri</h2>
+            
+            <!-- Loading -->
+            <div id="tkgm-loading" class="tkgm-loading" style="display: none;">
+                <div class="loading-spinner">🔄</div>
+                <p>TKGM'den parsel bilgileri alınıyor...</p>
+            </div>
+
+            <!-- Parsel Bilgileri -->
+            <div id="parsel-info" class="parsel-info-grid" style="display: none;">
+                <div class="info-card">
+                    <h3>📍 Konum Bilgileri</h3>
+                    <div id="location-details"></div>
+                </div>
+
+                <div class="info-card">
+                    <h3>🏗️ Parsel Detayları</h3>
+                    <div id="parsel-details"></div>
+                </div>
+
+                <div class="info-card">
+                    <h3>🗺️ Geometri Bilgileri</h3>
+                    <div id="geometry-details"></div>
+                </div>
+                
+                <!-- Ham JSON Verisi (Açılır/Kapanır) -->
+                <div id="raw-json">
+                    <details>
+                        <summary>🔎 Ham JSON Verisini Görüntüle</summary>
+                        <pre id="raw-json-data"></pre>
+                    </details>
+                </div>
+            </div>
+
+            <!-- Hata Mesajı -->
+            <div id="tkgm-error" class="tkgm-error" style="display: none;"></div>
+        </div>
+    </div>
+
+    <!-- Modal HTML -->
+    <div id="parselModal" class="modal-overlay" style="display:none;">
+        <div class="modal-content">
+            <button class="modal-close" id="closeParselModal">&times;</button>
+            <h2>Öznitelik Bilgisi</h2>
+            <table class="modal-table" id="modalParselTable"></table>
+        </div>
+    </div>
+
+    <script>
+    // Google Maps ve Places nesneleri
+    let map;
+    let placesService;
+    let autocompleteService;
+    let marker;
+    let parselPolygon;
+    let selectedCoordinates = null;
+
+    // Harita üzerinde yapı ve irtifak poligonlarını tutmak için
+    let yapiPolygons = [];
+
+    // Emsal işaretçileri
+    let hepsiemlakMarkers = [];
+
+    // DOM elemanları
+    const searchInput = document.getElementById('searchInput');
+    const searchBtn = document.getElementById('searchBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const suggestionsDiv = document.getElementById('suggestions');
+    const coordinateInfo = document.getElementById('coordinateInfo');
+    const selectedCoordsSpan = document.getElementById('selectedCoords');
+    const getTkgmBtn = document.getElementById('getTkgmBtn');
+    const getHepsiEmlakBtn = document.getElementById('getHepsiEmlakBtn');
+    const tkgmResults = document.getElementById('tkgm-results');
+    const tkgmLoading = document.getElementById('tkgm-loading');
+    const parselInfo = document.getElementById('parsel-info');
+    const tkgmError = document.getElementById('tkgm-error');
+    const locationDetails = document.getElementById('location-details');
+    const parselDetails = document.getElementById('parsel-details');
+    const geometryDetails = document.getElementById('geometry-details');
+    const rawJsonData = document.getElementById('raw-json-data');
+
+    // TKGM API URLs
+    const PROXY_BASE_URL = 'http://localhost:5000/api/parsel';
+
+    // Harita başlatma
+    function initMap() {
+        // Varsayılan konum (İstanbul)
+        const defaultLocation = { lat: 41.0082, lng: 28.9784 };
+        
+        // Harita oluşturma
+        map = new google.maps.Map(document.getElementById('map'), {
+            zoom: 12,
+            center: defaultLocation,
+            mapTypeControl: true,
+            streetViewControl: true,
+            fullscreenControl: true,
+            zoomControl: true,
+            mapTypeId: 'hybrid',
+            styles: [
+                {
+                    featureType: "poi",
+                    elementType: "labels",
+                    stylers: [{ visibility: "on" }]
+                }
+            ],
+            gestureHandling: "greedy",
+            scrollwheel: true
+        });
+
+        // Places servisi başlatma
+        placesService = new google.maps.places.PlacesService(map);
+        autocompleteService = new google.maps.places.AutocompleteService();
+
+        // Event listeners
+        setupEventListeners();
+        
+        // Harita tıklama event'i
+        map.addListener('click', (event) => {
+            handleMapClick(event.latLng);
+        });
+        
+        console.log('Google Maps başlatıldı - Harita tıklama özelliği aktif');
+    }
+
+    // Event listener'ları ayarlama
+    function setupEventListeners() {
+        // Arama butonu
+        searchBtn.addEventListener('click', performSearch);
+        
+        // Temizle butonu
+        clearBtn.addEventListener('click', clearAll);
+        
+        // TKGM butonu
+        getTkgmBtn.addEventListener('click', getTkgmData);
+        
+        // Emsal butonu
+        getHepsiEmlakBtn.addEventListener('click', getHepsiEmlakData);
+        
+        // Enter tuşu
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                performSearch();
+            }
+        });
+
+        // Otomatik tamamlama
+        searchInput.addEventListener('input', handleAutoComplete);
+        
+        // Önerileri gizleme
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.search-container')) {
+                suggestionsDiv.style.display = 'none';
+            }
+        });
+    }
+
+    // Harita tıklama işlemi
+    function handleMapClick(latLng) {
+        const lat = latLng.lat();
+        const lng = latLng.lng();
+        
+        selectedCoordinates = { lat, lng };
+        
+        // Koordinat bilgisini göster
+        selectedCoordsSpan.textContent = `${lat.toFixed(8)}, ${lng.toFixed(8)}`;
+        coordinateInfo.style.display = 'block';
+        getTkgmBtn.style.display = 'inline-block';
+        getHepsiEmlakBtn.style.display = 'inline-block';
+        
+        // Marker yerleştir
+        if (marker) {
+            marker.setMap(null);
+        }
+        
+        marker = new google.maps.Marker({
+            position: latLng,
+            map: map,
+            title: 'Seçilen Koordinat',
+            animation: google.maps.Animation.DROP,
+            icon: {
+                url: 'data:image/svg+xml;charset=UTF-8,%3Csvg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"%3E%3Cpath fill="%23FF6B6B" d="M16 2C10.486 2 6 6.486 6 12c0 6.837 9.269 16.943 9.542 17.285a1 1 0 001.916 0C17.731 28.943 27 18.837 27 12c0-5.514-4.486-10-10-10zm0 14c-2.206 0-4-1.794-4-4s1.794-4 4-4 4 1.794 4 4-1.794 4-4 4z"/%3E%3C/svg%3E',
+                scaledSize: new google.maps.Size(32, 32)
+            }
+        });
+        
+        // Haritayı bu konuma odakla
+        map.setCenter(latLng);
+        if (map.getZoom() < 16) {
+            map.setZoom(16);
+        }
+        
+        console.log('Harita tıklandı:', lat, lng);
+    }
+
+    // TKGM verilerini al
+    async function getTkgmData() {
+        if (!selectedCoordinates) {
+            alert('Önce haritadan bir nokta seçin');
+            return;
+        }
+        
+        const { lat, lng } = selectedCoordinates;
+        
+        // UI'ı güncelle
+        showTkgmLoading();
+        
+        try {
+            // 1. Koordinatlardan temel parsel bilgilerini al
+            const coordinateUrl = `${PROXY_BASE_URL}/koordinat/${lat}/${lng}`;
+            console.log('1. Adım: Koordinat sorgusu yapılıyor:', coordinateUrl);
+            
+            const coordinateResponse = await fetch(coordinateUrl);
+            const coordinateResult = await coordinateResponse.json();
+
+            if (!coordinateResponse.ok || !coordinateResult.success) {
+                const errorMsg = coordinateResult.error || `Koordinat API hatası: ${coordinateResponse.status}`;
+                throw new Error(errorMsg);
+            }
+            
+            const basicData = coordinateResult.data;
+            const props = basicData.properties;
+            
+            let bagimsizBolumData = null;
+            let cokBlokluBolumler = null;
+            
+            // 2. Mahalle ID, ada ve parsel varsa blok sorgusu yap
+            if (props && props.mahalleId && props.adaNo && props.parselNo) {
+                const { mahalleId, adaNo, parselNo } = props;
+                const blokUrl = `${PROXY_BASE_URL}/blok/${mahalleId}/${adaNo}/${parselNo}`;
+                console.log('2. Adım: Blok sorgusu yapılıyor:', blokUrl);
+                const blokResponse = await fetch(blokUrl);
+                const blokResult = await blokResponse.json();
+                if (blokResponse.ok && blokResult.features && blokResult.features.length > 1) {
+                    // Çok bloklu parsel
+                    cokBlokluBolumler = [];
+                    for (const blok of blokResult.features) {
+                        const blokAdi = blok.properties.blok;
+                        const bagimsizBolumUrl = `${PROXY_BASE_URL}/bagimsizbolum/${mahalleId}/${adaNo}/${parselNo}/${blokAdi}`;
+                        console.log(`3. Adım: ${blokAdi} Blok için bağımsız bölüm sorgusu:`, bagimsizBolumUrl);
+                        try {
+                            const bolumResponse = await fetch(bagimsizBolumUrl);
+                            if (!bolumResponse.ok) {
+                                // 404 veya başka bir hata kodu
+                                throw new Error(`API Hatası: ${bolumResponse.status}`);
+                            }
+                            const bolumResult = await bolumResponse.json();
+                            if (bolumResult.success) {
+                                cokBlokluBolumler.push({ blok: blokAdi, data: bolumResult.data });
+                            } else {
+                                cokBlokluBolumler.push({ blok: blokAdi, data: null });
+                            }
+                        } catch (err) {
+                            console.warn(`Blok için veri alınamadı: ${blokAdi}`, err);
+                            cokBlokluBolumler.push({ blok: blokAdi, data: null });
+                        }
+                    }
+                } else {
+                    // Tek blok veya blok sorgusu başarısız
+                    const bagimsizBolumUrl = `${PROXY_BASE_URL}/bagimsizbolum/${mahalleId}/${adaNo}/${parselNo}`;
+                    console.log('3. Adım: Bağımsız bölüm sorgusu yapılıyor:', bagimsizBolumUrl);
+                    const bagimsizBolumResponse = await fetch(bagimsizBolumUrl);
+                    const bagimsizBolumResult = await bagimsizBolumResponse.json();
+                    if (bagimsizBolumResponse.ok && bagimsizBolumResult.success) {
+                        bagimsizBolumData = bagimsizBolumResult.data;
+                        console.log('Bağımsız bölüm bilgisi başarıyla alındı.');
+                    } else {
+                        console.warn('Bağımsız bölüm bilgisi alınamadı veya bu parselde bulunmuyor.');
+                    }
+                }
+            } else {
+                console.log('Ek bilgiler için MahalleID, Ada, Parsel bulunamadı.');
+            }
+            
+            // 3. Tüm verileri göster
+            displayTkgmData(basicData, bagimsizBolumData, cokBlokluBolumler);
+            drawParselPolygon(basicData, props);
+            
+            // Yapı ve irtifak poligonlarını çek
+            const yapiUrl = `${PROXY_BASE_URL}/yapi_geometri/${props.mahalleId}/${props.adaNo}/${props.parselNo}`;
+            try {
+                const yapiResponse = await fetch(yapiUrl);
+                if (yapiResponse.ok) {
+                    const yapiData = await yapiResponse.json();
+                    if (yapiData && yapiData.features && yapiData.features.length > 0) {
+                        drawYapiAndIrtifakPolygons(yapiData);
+                    }
+                }
+            } catch (e) { console.warn('Yapı/irtifak poligonları alınamadı', e); }
+            
+        } catch (error) {
+            console.error('TKGM API Hatası:', error);
+            showTkgmError(`TKGM verisi alınamadı: ${error.message}`);
+        }
+    }
+
+    // TKGM loading göster
+    function showTkgmLoading() {
+        tkgmResults.style.display = 'block';
+        tkgmLoading.style.display = 'block';
+        parselInfo.style.display = 'none';
+        tkgmError.style.display = 'none';
+    }
+
+    // TKGM verisini göster
+    function displayTkgmData(basicData, bagimsizBolumData = null, cokBlokluBolumler = null) {
+        tkgmLoading.style.display = 'none';
+        parselInfo.style.display = 'grid';
+        tkgmError.style.display = 'none';
+
+        // Önceki bağımsız bölüm card'ını temizle
+        const existingCards = parselInfo.querySelectorAll('.bagimsiz-bolum-card');
+        existingCards.forEach(card => card.remove());
+        
+        const props = basicData.properties;
+        
+        // Konum bilgileri
+        locationDetails.innerHTML = `
+            <div class="detail-item">
+                <strong>🏙️ İl:</strong>
+                <span>${props.ilAd || 'Belirtilmemiş'}</span>
+            </div>
+            <div class="detail-item">
+                <strong>🏘️ İlçe:</strong>
+                <span>${props.ilceAd || 'Belirtilmemiş'}</span>
+            </div>
+            <div class="detail-item">
+                <strong>🏠 Mahalle:</strong>
+                <span>${props.mahalleAd || 'Belirtilmemiş'}</span>
+            </div>
+            <div class="detail-item">
+                <strong>🆔 Mahalle ID:</strong>
+                <span>${props.mahalleId || 'Belirtilmemiş'}</span>
+            </div>
+        `;
+        
+        // Parsel detayları
+        parselDetails.innerHTML = `
+            <div class="detail-item">
+                <strong>📍 Parsel No:</strong>
+                <span>${props.parselNo || 'Belirtilmemiş'}</span>
+            </div>
+            <div class="detail-item">
+                <strong>🏗️ Ada No:</strong>
+                <span>${props.adaNo || 'Belirtilmemiş'}</span>
+            </div>
+            <div class="detail-item">
+                <strong>📏 Alan:</strong>
+                <span>${props.alan || 'Belirtilmemiş'} m²</span>
+            </div>
+            <div class="detail-item">
+                <strong>📋 Nitelik:</strong>
+                <span>${props.nitelik || 'Belirtilmemiş'}</span>
+            </div>
+            <div class="detail-item">
+                <strong>🏢 Zemin Durumu:</strong>
+                <span>${props.zeminKmdurum || 'Belirtilmemiş'}</span>
+            </div>
+        `;
+        
+        // Geometri bilgileri
+        let geometryHtml = '';
+        if (basicData.geometry && basicData.geometry.coordinates) {
+            const coordinates = basicData.geometry.coordinates[0];
+            const area = calculatePolygonArea(coordinates);
+            geometryHtml = `
+                <div class="detail-item">
+                    <strong>🔢 Hesaplanan Alan:</strong>
+                    <span>~${area.toFixed(2)} m²</span>
+                </div>
+                <div class="coordinates-list">
+                    <h4>🗺️ Parsel Sınır Koordinatları (${coordinates.length} nokta)</h4>
+            `;
+            
+            coordinates.forEach((coord) => {
+                const [lng, lat] = coord;
+                geometryHtml += `
+                    <div class="coordinate-point">
+                        ${lat.toFixed(8)}, ${lng.toFixed(8)}
+                    </div>
+                `;
+            });
+            
+            geometryHtml += '</div>';
+        } else {
+            geometryHtml = '<p>Bu parsel için geometri verisi bulunamadı.</p>';
+        }
+        geometryDetails.innerHTML = geometryHtml;
+        
+        // Ham veri (tüm veriler)
+        const allData = {
+            parselBilgisi: basicData,
+            bagimsizBolumler: bagimsizBolumData,
+            cokBlokluBolumler: cokBlokluBolumler
+        };
+        rawJsonData.textContent = JSON.stringify(allData, null, 2);
+        
+        // Çok bloklu ise her blok için ayrı tablo göster
+        if (cokBlokluBolumler && cokBlokluBolumler.length > 0) {
+            cokBlokluBolumler.forEach(blokObj => {
+                if (blokObj.data && blokObj.data.features && blokObj.data.features.length > 0) {
+                    displayBagimsizBolumler(blokObj.data, blokObj.blok);
+                } else {
+                    // Blokta veri yoksa da başlık göster
+                    displayBagimsizBolumler({ features: [] }, blokObj.blok);
+                }
+            });
+        } else if (bagimsizBolumData && bagimsizBolumData.features && bagimsizBolumData.features.length > 0) {
+            displayBagimsizBolumler(bagimsizBolumData);
+        } else {
+            console.log("Görüntülenecek bağımsız bölüm bulunmuyor.");
+        }
+    }
+
+    // Bağımsız bölümleri göster
+    function displayBagimsizBolumler(data, blokAdi = null) {
+        const card = document.createElement('div');
+        card.className = 'bagimsiz-bolum-card';
+
+        // Açılır/kapanır yapı
+        let summaryTitle = blokAdi ? `🏢 Blok: ${blokAdi}` : '🏠 Bağımsız Bölümler';
+        let content = `
+            <details>
+                <summary style="font-size:1.1em; font-weight:bold; cursor:pointer;">
+                    ${summaryTitle} (${data.features.length} adet)
+                </summary>
+        `;
+
+        if (data.features && data.features.length > 0) {
+            content += `
+                <table class="bagimsiz-bolum-table">
+                    <thead>
+                        <tr>
+                            <th>Blok</th>
+                            <th>Kat</th>
+                            <th>Bölüm No</th>
+                            <th>Nitelik</th>
+                            <th>Arsa Payı</th>
+                            <th>Arsa Payı Oranı (%)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            data.features.forEach((bolum, idx) => {
+                const props = bolum.properties;
+                content += `
+                    <tr>
+                        <td>${props.blokAdi || props.blok || (blokAdi || '-')}</td>
+                        <td>${props.katNo || props.kat || '-'}</td>
+                        <td>${props.bagimsizBolumNo || props.no || '-'}</td>
+                        <td>${props.nitelik || '-'}</td>
+                        <td>
+                            <input type="number" min="0" class="arsa-payi-input" data-row="${idx}" value="${props.arsaPayi || ''}" style="width:60px;text-align:right;" placeholder="pay">
+                        </td>
+                        <td class="arsa-oran-cell">%</td>
+                    </tr>
+                `;
+            });
+
+            // Payda inputu tablo altına ekleniyor
+            content += `
+                    <tr>
+                        <td colspan="4" style="text-align:right;font-weight:bold;">Payda (Toplam):</td>
+                        <td colspan="2">
+                            <input type="number" min="1" class="arsa-paydasi-main-input" value="" style="width:80px;text-align:right;" placeholder="payda" readonly>
+                        </td>
+                    </tr>
+            `;
+
+            content += `
+                    </tbody>
+                </table>
+            `;
+        } else {
+            content += '<p>Bu parsel için bağımsız bölüm bilgisi bulunamadı.</p>';
+        }
+
+        content += '</details>';
+        card.innerHTML = content;
+        parselInfo.appendChild(card);
+
+        // --- Dinamik oran hesaplama ---
+        const payInputs = card.querySelectorAll('.arsa-payi-input');
+        const paydaInput = card.querySelector('.arsa-paydasi-main-input');
+        const oranCells = card.querySelectorAll('.arsa-oran-cell');
+
+        // Payda: arsa paylarının toplamı (her değişiklikte güncellenir)
+        function updatePaydaAndOranlar() {
+            let toplam = 0;
+            payInputs.forEach(input => {
+                const val = parseFloat(input.value);
+                if (!isNaN(val)) toplam += val;
+            });
+            paydaInput.value = toplam > 0 ? toplam : '';
+            const payda = toplam;
+            payInputs.forEach((input, i) => {
+                const pay = parseFloat(input.value);
+                let oran = '';
+                if (!isNaN(pay) && payda > 0) {
+                    oran = ((pay / payda) * 100).toFixed(2);
+                }
+                oranCells[i].textContent = oran ? `%${oran}` : '%';
+            });
+        }
+
+        // Event listeners
+        payInputs.forEach(input => {
+            input.addEventListener('input', updatePaydaAndOranlar);
+        });
+
+        // İlk yüklemede otomatik doldur
+        updatePaydaAndOranlar();
+    }
+
+    // TKGM hatası göster
+    function showTkgmError(message) {
+        tkgmLoading.style.display = 'none';
+        parselInfo.style.display = 'none';
+        tkgmError.style.display = 'block';
+        tkgmError.innerHTML = `
+            <h4>❌ TKGM Verisi Alınamadı</h4>
+            <p>${message}</p>
+            <small><strong>Çözüm önerileri:</strong>
+                <ul>
+                    <li>Proxy server'ın çalıştığından emin olun</li>
+                    <li>Internet bağlantınızı kontrol edin</li>
+                    <li>Farklı bir koordinat deneyin</li>
+                </ul>
+            </small>
+        `;
+    }
+
+    // Polygon alanı hesaplama (Shoelace formula)
+    function calculatePolygonArea(coordinates) {
+        let area = 0;
+        const n = coordinates.length;
+        
+        for (let i = 0; i < n; i++) {
+            const j = (i + 1) % n;
+            area += coordinates[i][0] * coordinates[j][1];
+            area -= coordinates[j][0] * coordinates[i][1];
+        }
+        
+        area = Math.abs(area) / 2;
+        
+        // Koordinat sistemini m²'ye çevir (yaklaşık)
+        const earthRadius = 6371000; // metre
+        const latRad = (selectedCoordinates.lat * Math.PI) / 180;
+        const degreeToMeter = earthRadius * Math.PI / 180;
+        const areaInSquareMeters = area * degreeToMeter * degreeToMeter * Math.cos(latRad);
+        
+        return areaInSquareMeters;
+    }
+
+    // Parsel poligonunu çiz
+    function drawParselPolygon(data, props = null) {
+        // Önceki polygon'u kaldır
+        if (parselPolygon) {
+            parselPolygon.setMap(null);
+        }
+        
+        if (!data.geometry || !data.geometry.coordinates) {
+            console.log('Geometri verisi bulunamadı');
+            return;
+        }
+        
+        const coordinates = data.geometry.coordinates[0];
+        
+        // Google Maps koordinat formatına çevir
+        const polygonCoords = coordinates.map(coord => ({
+            lat: coord[1],
+            lng: coord[0]
+        }));
+        
+        // Polygon oluştur
+        parselPolygon = new google.maps.Polygon({
+            paths: polygonCoords,
+            strokeColor: '#FF0000',
+            strokeOpacity: 0.8,
+            strokeWeight: 3,
+            fillColor: '#FF0000',
+            fillOpacity: 0.2,
+            editable: false,
+            draggable: false
+        });
+        
+        // Haritaya ekle
+        parselPolygon.setMap(map);
+        
+        // Polygon'a zoom yap
+        const bounds = new google.maps.LatLngBounds();
+        polygonCoords.forEach(coord => bounds.extend(coord));
+        map.fitBounds(bounds);
+        
+        // Poligon tıklanınca modal aç
+        if (props) {
+            parselPolygon.addListener('click', () => showParselModal(props));
+        }
+        
+        console.log('Parsel poligonu çizildi');
+    }
+
+    // Otomatik tamamlama işlemi
+    function handleAutoComplete() {
+        const query = searchInput.value.trim();
+        
+        if (query.length < 2) {
+            suggestionsDiv.style.display = 'none';
+            return;
+        }
+
+        autocompleteService.getPlacePredictions({
+            input: query,
+            language: 'tr',
+            types: ['establishment', 'geocode']
+        }, (predictions, status) => {
+            if (status === google.maps.places.PlacesServiceStatus.OK && predictions) {
+                showSuggestions(predictions.slice(0, 5));
+            } else {
+                suggestionsDiv.style.display = 'none';
+            }
+        });
+    }
+
+    // Önerileri gösterme
+    function showSuggestions(predictions) {
+        suggestionsDiv.innerHTML = '';
+        
+        predictions.forEach(prediction => {
+            const suggestionItem = document.createElement('div');
+            suggestionItem.className = 'suggestion-item';
+            suggestionItem.textContent = prediction.description;
+            
+            suggestionItem.addEventListener('click', () => {
+                searchInput.value = prediction.description;
+                suggestionsDiv.style.display = 'none';
+                searchByPlaceId(prediction.place_id);
+            });
+            
+            suggestionsDiv.appendChild(suggestionItem);
+        });
+        
+        suggestionsDiv.style.display = 'block';
+    }
+
+    // Arama işlemi
+    function performSearch() {
+        const query = searchInput.value.trim();
+        
+        if (!query) {
+            alert('Lütfen bir yer adı girin');
+            return;
+        }
+
+        suggestionsDiv.style.display = 'none';
+
+        // Text search kullanarak arama
+        const request = {
+            query: query,
+            language: 'tr'
+        };
+
+        placesService.textSearch(request, (results, status) => {
+            if (status === google.maps.places.PlacesServiceStatus.OK && results[0]) {
+                const place = results[0];
+                const location = place.geometry.location;
+                
+                // Harita tıklama simülasyonu
+                handleMapClick(location);
+                
+                // Arama inputunu temizle
+                searchInput.value = '';
+            } else {
+                alert('Yer bulunamadı. Lütfen farklı bir arama terimi deneyin.');
+            }
+        });
+    }
+
+    // Place ID ile arama
+    function searchByPlaceId(placeId) {
+        const request = {
+            placeId: placeId,
+            fields: ['name', 'formatted_address', 'geometry'],
+            language: 'tr'
+        };
+
+        placesService.getDetails(request, (place, status) => {
+            if (status === google.maps.places.PlacesServiceStatus.OK) {
+                const location = place.geometry.location;
+                handleMapClick(location);
+            }
+        });
+    }
+
+    // Tümü temizle
+    function clearAll() {
+        // Input'u temizle
+        searchInput.value = '';
+        suggestionsDiv.style.display = 'none';
+        
+        // Koordinat bilgisini gizle
+        coordinateInfo.style.display = 'none';
+        selectedCoordinates = null;
+        
+        // TKGM sonuçlarını gizle
+        tkgmResults.style.display = 'none';
+        
+        // Dinamik olarak eklenen bağımsız bölüm card'ını kaldır
+        const bagimsizBolumCards = parselInfo.querySelectorAll('.bagimsiz-bolum-card');
+        bagimsizBolumCards.forEach(card => card.remove());
+        
+        // Marker'ı kaldır
+        if (marker) {
+            marker.setMap(null);
+            marker = null;
+        }
+        
+        // Polygon'u kaldır
+        if (parselPolygon) {
+            parselPolygon.setMap(null);
+            parselPolygon = null;
+        }
+        
+        // Yapı ve irtifak poligonlarını temizle
+        if (yapiPolygons && yapiPolygons.length > 0) {
+            yapiPolygons.forEach(p => p.setMap(null));
+            yapiPolygons = [];
+        }
+        
+        // Emsal işaretçilerini temizle
+        hepsiemlakMarkers.forEach(m => m.setMap(null));
+        hepsiemlakMarkers = [];
+        getHepsiEmlakBtn.style.display = 'none';
+        
+        console.log('Tümü temizlendi');
+    }
+
+    // Yapı ve irtifak poligonlarını çiz
+    function drawYapiAndIrtifakPolygons(featureCollection) {
+        // Önceki poligonları kaldır
+        yapiPolygons.forEach(p => p.setMap(null));
+        yapiPolygons = [];
+        if (!featureCollection.features) return;
+        featureCollection.features.forEach(feature => {
+            const coords = feature.geometry.coordinates[0].map(coord => ({
+                lat: coord[1],
+                lng: coord[0]
+            }));
+            let color = '#007bff'; // default: yapı
+            if (feature.properties.tip === 'Irtifak_Hakki') color = '#28a745';
+            const polygon = new google.maps.Polygon({
+                paths: coords,
+                strokeColor: color,
+                strokeOpacity: 0.8,
+                strokeWeight: 2,
+                fillColor: color,
+                fillOpacity: 0.25
+            });
+            polygon.setMap(map);
+            yapiPolygons.push(polygon);
+            // Alanı ve tipi ekranda göster
+            const alan = feature.properties.alan;
+            const ad = feature.properties.ad;
+            const tip = feature.properties.tip;
+            geometryDetails.innerHTML += `
+                <div class="detail-item">
+                    <strong>${tip === 'Yapi' ? '🏢 Yapı' : '🟩 İrtifak'} (${ad}):</strong>
+                    <span>${alan.toFixed(2)} m²</span>
+                </div>
+            `;
+        });
+    }
+
+    // Show Parsel Modal
+    function showParselModal(props) {
+        const table = document.getElementById('modalParselTable');
+        table.innerHTML = `
+          <tr><td>İl</td><td>${props.ilAd || '-'}</td></tr>
+          <tr><td>İlçe</td><td>${props.ilceAd || '-'}</td></tr>
+          <tr><td>Mahalle</td><td>${props.mahalleAd || '-'}</td></tr>
+          <tr><td>Mahalle No</td><td>${props.mahalleId || '-'}</td></tr>
+          <tr><td>Ada</td><td>${props.adaNo || '-'}</td></tr>
+          <tr><td>Parsel</td><td>${props.parselNo || '-'}</td></tr>
+          <tr><td>Tapu Alanı</td><td>${props.alan || '-'}</td></tr>
+          <tr><td>Nitelik</td><td>${props.nitelik || '-'}</td></tr>
+          <tr><td>Zemin Tip</td><td>${props.zeminKmdurum || '-'}</td></tr>
+          <tr><td>Pafta</td><td>${props.pafta || '-'}</td></tr>
+        `;
+        document.getElementById('parselModal').style.display = 'flex';
+    }
+
+    // Close Parsel Modal
+    function closeParselModal() {
+        document.getElementById('parselModal').style.display = 'none';
+    }
+    document.getElementById('closeParselModal').onclick = closeParselModal;
+    document.getElementById('parselModal').onclick = function(e) {
+        if (e.target === this) closeParselModal();
+    };
+
+    // Emsal verilerini al
+    async function getHepsiEmlakData() {
+        if (!selectedCoordinates) {
+            alert('Önce haritadan bir nokta seçin');
+            return;
+        }
+        // 1500m x 1500m kutu için yarıçap
+        const boxSize = 1500; // metre
+        const half = boxSize / 2;
+        const lat = selectedCoordinates.lat;
+        const lng = selectedCoordinates.lng;
+        // 1 derece enlem ≈ 111320 metre
+        const latDelta = half / 111320;
+        // 1 derece boylam ≈ 111320 * cos(lat)
+        const lngDelta = half / (111320 * Math.cos(lat * Math.PI / 180));
+        const topLeft = `${lat + latDelta},${lng - lngDelta}`;
+        const bottomRight = `${lat - latDelta},${lng + lngDelta}`;
+        const url = `http://localhost:5000/api/hepsiemlak?mapSize=1500&intent=kiralik&mainCategory=konut&buildingAges=0-0,1-5,6-10&mapTopLeft=${topLeft}&mapBottomRight=${bottomRight}`;
+        // UI: Önceki markerları temizle
+        hepsiemlakMarkers.forEach(m => m.setMap(null));
+        hepsiemlakMarkers = [];
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+            if (data.realties && data.realties.length > 0) {
+                data.realties.forEach(item => {
+                    const marker = new google.maps.Marker({
+                        position: { lat: item.mapLocation.lat, lng: item.mapLocation.lon },
+                        map: map,
+                        icon: {
+                            url: "https://cdn-icons-png.flaticon.com/512/69/69524.png",
+                            scaledSize: new google.maps.Size(32, 32)
+                        },
+                        title: `Fiyat: ${item.price} ${item.currency}`
+                    });
+                    const info = new google.maps.InfoWindow({
+                        content: `<b>Fiyat:</b> ${item.price} ${item.currency}<br><a href="https://www.hepsiemlak.com/ilan/${item.listingId}" target="_blank">İlanı Gör</a>`
+                    });
+                    marker.addListener('click', () => info.open(map, marker));
+                    hepsiemlakMarkers.push(marker);
+                });
+            } else {
+                alert("Bu bölgede emsal ilan bulunamadı.");
+            }
+        } catch (e) {
+            alert("HepsiEmlak verisi alınamadı: " + e.message);
+        }
+    }
+
+    // Sayfa yüklendiğinde çalışacak
+    document.addEventListener('DOMContentLoaded', () => {
+        console.log('Sayfa yüklendi, Google Maps bekleniyor...');
+    });
+    </script>
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCObeHN49sOzFlSWSpsiO5vAHH7TeqOYxg&libraries=places&callback=initMap"></script>
+</body>
+</html> 
