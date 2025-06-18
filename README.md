@@ -1,6 +1,6 @@
 # 🗺️ Google Maps Yer Arama Uygulaması
 
-Modern ve kullanıcı dostu bir yer arama uygulaması. Google Maps API'lerini kullanarak yerler arayabilir, koordinatlarını görebilir ve haritada konumlarını inceleyebilirsiniz.
+Modern ve kullanıcı dostu bir yer arama uygulaması. Google Maps API'lerini kullanarak yerler arayabilir, koordinatlarını görebilir ve haritada konumlarını inceleyebilirsiniz. Daha modern bir görünüm için `index_bootstrap.html` dosyasındaki Bootstrap 5 arayüzünü deneyebilirsiniz.
 
 ## ✨ Özellikler
 
@@ -9,6 +9,7 @@ Modern ve kullanıcı dostu bir yer arama uygulaması. Google Maps API'lerini ku
 - 🗺️ **İnteraktif Harita**: Yakınlaştırma, sokak görünümü, tam ekran
 - 📱 **Responsive Tasarım**: Mobil ve masaüstü uyumlu
 - 🎨 **Modern UI**: Gradyan arka plan ve görsel ikonlar
+- 🆕 **Bootstrap 5 Arayüzü**: `index_bootstrap.html` dosyasında daha modern bir arayüz
 
 ## 🚀 Kurulum
 
